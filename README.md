@@ -9,10 +9,26 @@ hackathon. The app uses Next.js, Supabase Realtime, and Vercel.
 - Share a realtime drawing canvas across browser tabs.
 - Rotate the drawer and reveal the word only to the drawer.
 - Pick from 3 words, use word packs or custom host words, and tune room settings.
-- Draw with undo, shapes, fill, opacity, eyedropper, backgrounds, and mobile-friendly controls.
+- Draw with brush, eraser, fill, undo, and mobile-friendly controls on a white canvas.
 - Submit guesses through the server API with typo tolerance, close hints, rate limiting, and speed scoring.
 - Spectate without taking one of the 10 player slots.
 - Save round summaries, replay data, and final results in Supabase.
+
+## Interface
+
+The room is split by role so it is always obvious what you should be doing:
+
+- The drawer picks a word in a full-screen overlay and is the only one who
+  sees the drawing toolbar.
+- Guessers get a bare canvas with the guess box pinned directly above it, and
+  clear correct / close / wrong feedback on every attempt.
+- Room settings, the QR code, and restart are folded into a collapsed panel so
+  they stay out of the way during a round.
+
+The look is deliberately playful: a bright palette, sticker-style cards, the
+Fredoka display font, and hand-drawn inline SVG mascots in
+`src/components/Doodles.tsx`. All motion is CSS keyframes and is switched off
+under `prefers-reduced-motion`.
 
 ## Getting Started
 
@@ -53,7 +69,8 @@ Open http://localhost:3000 in two tabs.
 
 ## Deploy on Vercel
 
-The production deploy needs a logged-in Vercel CLI and a linked project:
+Connect this repository to the Vercel project (Settings -> Git) and every push
+to `main` deploys automatically. To deploy from the CLI instead:
 
 ```bash
 npx vercel login
