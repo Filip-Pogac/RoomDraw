@@ -35,6 +35,7 @@ import {
   StarDoodle,
 } from "@/components/Doodles";
 import { DrawingReplayModal } from "@/components/DrawingReplayModal";
+import { track } from "@/lib/analytics";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
 import {
   MAX_PLAYERS_PER_ROOM,
@@ -267,6 +268,12 @@ export function GameClient() {
   const lastPersistedSettingsRef = useRef("");
   const savedFinalKeysRef = useRef(new Set<string>());
   const savedRoundKeysRef = useRef(new Set<string>());
+  // Engagement funnel bookkeeping: each room gets one "did they really play"
+  // verdict, so these reset whenever the player enters a different room.
+  const analyticsRoomRef = useRef<string | null>(null);
+  const multiplayerReachedRef = useRef(false);
+  const guessAttemptsRef = useRef(0);
+  const gamePlayedRef = useRef(false);
   const [view, setView] = useState<ViewState>("join");
   const [name, setName] = useState(() =>
     typeof window === "undefined" ? "" : window.localStorage.getItem("roomdraw:name") ?? "",
@@ -342,10 +349,47 @@ export function GameClient() {
     () => new Set(playingPlayers.map((item) => item.id)),
     [playingPlayers],
   );
+  const playerCount = playingPlayers.length;
   const sortedPlayers = useMemo(
     () => [...playingPlayers].sort((first, second) => second.score - first.score),
     [playingPlayers],
   );
+
+  // "Played the game" means the room was not a solo dead end: at least two
+  // players were in it and someone actually tried to guess. Fired once per room.
+  const trackGamePlayed = useCallback((roomCode: string) => {
+    if (gamePlayedRef.current || !multiplayerReachedRef.current || guessAttemptsRef.current === 0) {
+      return;
+    }
+
+    gamePlayedRef.current = true;
+    track("game_played", {
+      room_code: roomCode,
+      guess_attempts: guessAttemptsRef.current,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (view !== "room" || !room) {
+      return;
+    }
+
+    if (analyticsRoomRef.current !== room.code) {
+      analyticsRoomRef.current = room.code;
+      multiplayerReachedRef.current = false;
+      guessAttemptsRef.current = 0;
+      gamePlayedRef.current = false;
+    }
+
+    if (playerCount >= 2 && !multiplayerReachedRef.current) {
+      multiplayerReachedRef.current = true;
+      track("room_multiplayer_reached", {
+        room_code: room.code,
+        player_count: playerCount,
+      });
+      trackGamePlayed(room.code);
+    }
+  }, [playerCount, room, trackGamePlayed, view]);
   const host = playingPlayers[0] ?? null;
   const drawer = playingPlayers.find((item) => item.id === room?.drawer_player_id) ?? null;
   const isHost = Boolean(currentPlayer && host?.id === currentPlayer.id);
@@ -932,6 +976,7 @@ export function GameClient() {
 
     try {
       const result = await createRoom(name, getRoomSessionKey());
+      track("room_created", { room_code: result.room.code });
       setIsSpectator(false);
       setSpectatorId(null);
       await enterRoom(result.room, result.player);
@@ -969,6 +1014,7 @@ export function GameClient() {
           // Spectator persistence is optional until the migration is applied.
         }
 
+        track("room_joined", { room_code: snapshot.room.code, as_spectator: true });
         setSpectatorId(nextSpectatorId);
         setIsSpectator(true);
         await enterRoom(snapshot.room, {
@@ -985,6 +1031,7 @@ export function GameClient() {
       setSpectatorId(null);
       const nextPlayer = await joinRoom(joinCode, name, getRoomSessionKey());
       const snapshot = await fetchRoomSnapshot(joinCode);
+      track("room_joined", { room_code: snapshot.room.code, as_spectator: false });
       await enterRoom(snapshot.room, nextPlayer);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not join room.");
@@ -1214,6 +1261,11 @@ export function GameClient() {
         roomSettings.maxPlayers,
       );
       await loadSnapshot(room.code);
+      track("round_started", {
+        room_code: room.code,
+        round_number: room.round_number + 1,
+        player_count: playingPlayers.length,
+      });
       setIsChoosingWord(false);
       setWordChoices([]);
       setNotice(`${nextDrawer.name} is drawing.`);
@@ -1265,9 +1317,25 @@ export function GameClient() {
       setError("");
       setLastGuessHint("");
 
+      guessAttemptsRef.current += 1;
+
       try {
         const result = await submitGuess(room.code, currentPlayer.id, text);
         await loadSnapshot(room.code);
+        track("guess_attempted", {
+          room_code: room.code,
+          round_number: room.round_number,
+          outcome: result.alreadyCorrect
+            ? "already_correct"
+            : result.isCorrect
+              ? "correct"
+              : result.close
+                ? "close"
+                : "wrong",
+          attempt_number: guessAttemptsRef.current,
+        });
+        trackGamePlayed(room.code);
+
         if (result.alreadyCorrect) {
           setGuessFeedback({
             kind: "correct",
@@ -1316,7 +1384,7 @@ export function GameClient() {
         setError(caught instanceof Error ? caught.message : "Could not send guess.");
       }
     },
-    [currentPlayer, guessText, isDrawer, isSpectator, loadSnapshot, playTone, room],
+    [currentPlayer, guessText, isDrawer, isSpectator, loadSnapshot, playTone, room, trackGamePlayed],
   );
 
   if (!supabaseReady) {

@@ -59,6 +59,14 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
+Analytics is optional. Without `NEXT_PUBLIC_POSTHOG_KEY` every tracking call
+silently no-ops, so the game runs exactly the same:
+
+```bash
+NEXT_PUBLIC_POSTHOG_KEY=
+NEXT_PUBLIC_POSTHOG_HOST=https://eu.i.posthog.com
+```
+
 4. Run locally:
 
 ```bash
@@ -84,6 +92,13 @@ npx vercel env add NEXT_PUBLIC_SUPABASE_URL production
 npx vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY production
 npx vercel env add NEXT_PUBLIC_SUPABASE_URL preview
 npx vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY preview
+```
+
+To collect analytics from the deployed site, add the PostHog key too:
+
+```bash
+npx vercel env add NEXT_PUBLIC_POSTHOG_KEY production
+npx vercel env add NEXT_PUBLIC_POSTHOG_HOST production
 ```
 
 For stronger server-side game actions, also add the Supabase service role key:
@@ -124,6 +139,30 @@ where pubname = 'supabase_realtime'
     'spectators'
   );
 ```
+
+## Analytics
+
+PostHog is initialised from `src/instrumentation-client.ts`, which runs before
+hydration, and every event goes through the small wrapper in
+`src/lib/analytics.ts`. Pageviews are autocaptured; entering a room only changes
+the query string, so a visit is counted once.
+
+The custom events answer "how many visitors actually play?":
+
+| Event | Fired when |
+| --- | --- |
+| `$pageview` | Someone opens the site |
+| `room_created` | A room is created |
+| `room_joined` | A room is joined (`as_spectator` distinguishes watchers) |
+| `room_multiplayer_reached` | The room first has 2+ active players |
+| `guess_attempted` | A guess is sent (`outcome`: correct / close / wrong / already_correct) |
+| `game_played` | Both of the above happened in the same room - the real conversion |
+| `round_started` | A drawing round begins |
+
+`game_played` fires at most once per room, whichever condition lands last, and
+carries `guess_attempts`. In PostHog, build a funnel of `$pageview` ->
+`room_joined` or `room_created` -> `room_multiplayer_reached` ->
+`guess_attempted` -> `game_played` to see where visitors drop off.
 
 ## Demo
 
